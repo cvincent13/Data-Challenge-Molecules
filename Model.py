@@ -1,12 +1,13 @@
 from torch import nn
 import torch.nn.functional as F
 
-from torch_geometric.nn import GCNConv
-from torch_geometric.nn import global_mean_pool
 from transformers import AutoModel
 
 from torch_geometric.nn.models import GraphSAGE, GIN
-from torch_geometric.nn import GENConv, DeepGCNLayer
+from torch_geometric.nn import GENConv, DeepGCNLayer, GCNConv, ResGatedGraphConv, GINEConv, Linear, global_mean_pool
+from torch_geometric.nn.norm import LayerNorm
+from torch_geometric.utils import to_dense_batch
+import torch
 
 
 class GraphEncoder(nn.Module):
@@ -146,6 +147,8 @@ class RWSEEncoder(nn.Module):
         rwse = self.norm(rwse)
         rwse = self.embedding_se(rwse)
         x = self.embedding_x(batch.x)
+        print(x.shape)
+        print(rwse.shape)
         x = torch.cat((x, rwse), 1)
         batch.x = self.in_dropout(x)
         return batch

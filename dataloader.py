@@ -4,11 +4,15 @@ import torch
 from torch_geometric.data import Dataset 
 from torch_geometric.data import Data
 import torch_geometric.transforms as T
+from torch_geometric.utils import to_dense_adj
 from torch.utils.data import Dataset as TorchDataset
 import pandas as pd
 
 def randow_walk_se(graph, walk_length):
-    adj = to_dense_adj(graph.edge_index).squeeze(0)
+    try:
+        adj = to_dense_adj(graph.edge_index, max_num_nodes=graph.num_nodes).squeeze(0)
+    except:
+       adj = torch.ones((1,1)) # For graphs with only 1 node
     deg = adj.sum(dim=1)
     deg_inv = 1./deg
     deg_inv[deg_inv == float('inf')] = 0
@@ -32,7 +36,7 @@ class AddRWStructEncoding(T.BaseTransform):
 
 
 class GraphTextDataset(Dataset):
-    def __init__(self, root, gt, split, tokenizer=None, transform=None, pre_transform=None):
+    def __init__(self, root, gt, split, tokenizer=None, graph_transform=None, transform=None, pre_transform=None):
         self.root = root
         self.gt = gt
         self.split = split
@@ -40,6 +44,8 @@ class GraphTextDataset(Dataset):
         self.description = pd.read_csv(os.path.join(self.root, split+'.tsv'), sep='\t', header=None)   
         self.description = self.description.set_index(0).to_dict()
         self.cids = list(self.description[1].keys())
+        
+        self.graph_transform = graph_transform
         
         self.idx_to_cid = {}
         i = 0
@@ -99,6 +105,8 @@ class GraphTextDataset(Dataset):
                                    add_special_tokens=True,)
             edge_index, x = self.process_graph(raw_path)
             data = Data(x=x, edge_index=edge_index, input_ids=text_input['input_ids'], attention_mask=text_input['attention_mask'])
+            if self.graph_transform is not None:
+               data = self.graph_transform(data)
 
             torch.save(data, osp.join(self.processed_dir, 'data_{}.pt'.format(cid)))
             i += 1
