@@ -3,8 +3,33 @@ import os.path as osp
 import torch
 from torch_geometric.data import Dataset 
 from torch_geometric.data import Data
+import torch_geometric.transforms as T
 from torch.utils.data import Dataset as TorchDataset
 import pandas as pd
+
+def randow_walk_se(graph, walk_length):
+    adj = to_dense_adj(graph.edge_index).squeeze(0)
+    deg = adj.sum(dim=1)
+    deg_inv = 1./deg
+    deg_inv[deg_inv == float('inf')] = 0
+    P = adj*deg_inv.view(-1,1)
+
+    rwse = []
+    Pk = P.clone().detach()
+    for k in range(walk_length):
+        rwse.append(torch.diagonal(Pk))
+        Pk = Pk@P
+
+    rwse = torch.stack(rwse, dim=-1)
+    graph.rwse = rwse
+    return graph
+
+class AddRWStructEncoding(T.BaseTransform):
+    def __init__(self, walk_length):
+        self.walk_length = walk_length
+    def __call__(self, graph):
+        return randow_walk_se(graph, self.walk_length)
+
 
 class GraphTextDataset(Dataset):
     def __init__(self, root, gt, split, tokenizer=None, transform=None, pre_transform=None):
@@ -88,6 +113,84 @@ class GraphTextDataset(Dataset):
     def get_cid(self, cid):
         data = torch.load(osp.join(self.processed_dir, 'data_{}.pt'.format(cid)))
         return data
+    
+
+class GraphDatasetTrain(Dataset):
+    def __init__(self, root, gt, split, transform=None, pre_transform=None):
+        self.root = root
+        self.gt = gt
+        self.split = split
+        self.description = pd.read_csv(os.path.join(self.root, split+'.tsv'), sep='\t', header=None)
+        self.cids = self.description[0].tolist()
+        
+        self.idx_to_cid = {}
+        i = 0
+        for cid in self.cids:
+            self.idx_to_cid[i] = cid
+            i += 1
+        super(GraphDatasetTrain, self).__init__(root, transform, pre_transform)
+
+    @property
+    def raw_file_names(self):
+        return [str(cid) + ".graph" for cid in self.cids]
+
+    @property
+    def processed_file_names(self):
+        return ['data_{}.pt'.format(cid) for cid in self.cids]
+    
+    @property
+    def raw_dir(self) -> str:
+        return osp.join(self.root, 'raw')
+
+    @property
+    def processed_dir(self) -> str:
+        return osp.join(self.root, 'processed/', self.split)
+
+    def download(self):
+        pass
+        
+    def process_graph(self, raw_path):
+      edge_index  = []
+      x = []
+      with open(raw_path, 'r') as f:
+        next(f)
+        for line in f: 
+          if line != "\n":
+            edge = *map(int, line.split()), 
+            edge_index.append(edge)
+          else:
+            break
+        next(f)
+        for line in f:
+          substruct_id = line.strip().split()[-1]
+          if substruct_id in self.gt.keys():
+            x.append(self.gt[substruct_id])
+          else:
+            x.append(self.gt['UNK'])
+        return torch.LongTensor(edge_index).T, torch.FloatTensor(x)
+
+    def process(self):
+        i = 0        
+        for raw_path in self.raw_paths:
+            cid = int(raw_path.split('/')[-1][:-6])
+            edge_index, x = self.process_graph(raw_path)
+            data = Data(x=x, edge_index=edge_index)
+            torch.save(data, osp.join(self.processed_dir, 'data_{}.pt'.format(cid)))
+            i += 1
+
+    def len(self):
+        return len(self.processed_file_names)
+
+    def get(self, idx):
+        data = torch.load(osp.join(self.processed_dir, 'data_{}.pt'.format(self.idx_to_cid[idx])))
+        return data
+
+    def get_cid(self, cid):
+        data = torch.load(osp.join(self.processed_dir, 'data_{}.pt'.format(cid)))
+        return data
+    
+    def get_idx_to_cid(self):
+        return self.idx_to_cid
     
     
 class GraphDataset(Dataset):

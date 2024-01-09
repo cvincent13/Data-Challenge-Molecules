@@ -1,4 +1,4 @@
-from dataloader import GraphTextDataset, GraphDataset, TextDataset
+from dataloader import GraphTextDataset, GraphDataset, TextDataset, AddRWStructEncoding
 from torch_geometric.data import DataLoader
 from torch.utils.data import DataLoader as TorchDataLoader
 from Model import Model
@@ -19,8 +19,9 @@ def contrastive_loss(v1, v2):
 model_name = 'distilbert-base-uncased'
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 gt = np.load("./data/token_embedding_dict.npy", allow_pickle=True)[()]
-val_dataset = GraphTextDataset(root='./data/', gt=gt, split='val', tokenizer=tokenizer)
-train_dataset = GraphTextDataset(root='./data/', gt=gt, split='train', tokenizer=tokenizer)
+walk_length = 20
+val_dataset = GraphTextDataset(root='./data/', gt=gt, split='val', tokenizer=tokenizer, pre_transform=AddRWStructEncoding(walk_length))
+train_dataset = GraphTextDataset(root='./data/', gt=gt, split='train', tokenizer=tokenizer, pre_transform=AddRWStructEncoding(walk_length))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

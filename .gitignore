@@ -1,2 +1,5 @@
 data
 submission.csv
+checkpoints
+__pycache__
+rapport.txt
