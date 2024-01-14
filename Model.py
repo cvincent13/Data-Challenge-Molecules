@@ -11,18 +11,12 @@ import torch
 
 
 class GraphEncoder(nn.Module):
-    def __init__(self, num_node_features, nout, nhid, graph_hidden_channels, graph_layers):
+    def __init__(self, num_node_features, graph_hidden_channels, graph_layers):
         super(GraphEncoder, self).__init__()
-        self.nhid = nhid
-        self.nout = nout
-        self.relu = nn.ReLU()
-        self.ln = nn.LayerNorm((nout))
         self.conv_layers = nn.ModuleList()
         self.conv_layers.append(GCNConv(num_node_features, graph_hidden_channels))
         for i in range(1,graph_layers):
             self.conv_layers.append(GCNConv(graph_hidden_channels, graph_hidden_channels))
-        self.mol_hidden1 = nn.Linear(graph_hidden_channels, nhid)
-        self.mol_hidden2 = nn.Linear(nhid, nout)
 
     def forward(self, graph_batch):
         x = graph_batch.x
@@ -32,19 +26,13 @@ class GraphEncoder(nn.Module):
             x = conv(x, edge_index)
             x = x.relu()
         x = global_mean_pool(x, batch)
-        x = self.mol_hidden1(x).relu()
-        x = self.mol_hidden2(x)
         return x
     
 
 class GraphEncoderSAGE(nn.Module):
-    def __init__(self, num_node_features, nout, nhid, graph_hidden_channels, graph_layers):
+    def __init__(self, num_node_features, graph_hidden_channels, graph_layers):
         super(GraphEncoderSAGE, self).__init__()
-        self.nhid = nhid
-        self.nout = nout
         self.gcn = GraphSAGE(num_node_features, graph_hidden_channels, graph_layers, graph_hidden_channels)
-        self.mol_hidden1 = nn.Linear(graph_hidden_channels, nhid)
-        self.mol_hidden2 = nn.Linear(nhid, nout)
 
     def forward(self, graph_batch):
         x = graph_batch.x
@@ -53,8 +41,6 @@ class GraphEncoderSAGE(nn.Module):
 
         x = self.gcn(x, edge_index)
         x = global_mean_pool(x, batch)
-        x = self.mol_hidden1(x).relu()
-        x = self.mol_hidden2(x)
         return x
 
 
@@ -94,13 +80,9 @@ class DeeperGCN(nn.Module):
     
 
 class GraphEncoderDeep(nn.Module):
-    def __init__(self, num_node_features, nout, nhid, graph_hidden_channels, graph_layers):
+    def __init__(self, num_node_features, graph_hidden_channels, graph_layers):
         super(GraphEncoderDeep, self).__init__()
-        self.nhid = nhid
-        self.nout = nout
         self.gcn = DeeperGCN(num_node_features, graph_hidden_channels, graph_layers)
-        self.mol_hidden1 = nn.Linear(graph_hidden_channels, nhid)
-        self.mol_hidden2 = nn.Linear(nhid, nout)
 
     def forward(self, graph_batch):
         x = graph_batch.x
@@ -109,19 +91,13 @@ class GraphEncoderDeep(nn.Module):
 
         x = self.gcn(x, edge_index)
         x = global_mean_pool(x, batch)
-        x = self.mol_hidden1(x).relu()
-        x = self.mol_hidden2(x)
         return x
     
 
 class GraphEncoderGIN(nn.Module):
-    def __init__(self, num_node_features, nout, nhid, graph_hidden_channels, graph_layers):
+    def __init__(self, num_node_features, graph_hidden_channels, graph_layers):
         super(GraphEncoderGIN, self).__init__()
-        self.nhid = nhid
-        self.nout = nout
         self.gcn = GIN(num_node_features, graph_hidden_channels, graph_layers)
-        self.mol_hidden1 = nn.Linear(graph_hidden_channels, nhid)
-        self.mol_hidden2 = nn.Linear(nhid, nout)
 
     def forward(self, graph_batch):
         x = graph_batch.x
@@ -130,8 +106,6 @@ class GraphEncoderGIN(nn.Module):
 
         x = self.gcn(x, edge_index)
         x = global_mean_pool(x, batch)
-        x = self.mol_hidden1(x).relu()
-        x = self.mol_hidden2(x)
         return x
 
 class RWSEEncoder(nn.Module):
@@ -147,8 +121,6 @@ class RWSEEncoder(nn.Module):
         rwse = self.norm(rwse)
         rwse = self.embedding_se(rwse)
         x = self.embedding_x(batch.x)
-        print(x.shape)
-        print(rwse.shape)
         x = torch.cat((x, rwse), 1)
         batch.x = self.in_dropout(x)
         return batch
@@ -217,9 +189,7 @@ class GPSLayer(nn.Module):
 
 class GraphEncoderGPS(nn.Module):
     def __init__(self, 
-                 num_node_features, 
-                 nout, 
-                 nhid, 
+                 num_node_features,  
                  graph_hidden_channels, 
                  graph_layers, 
                  n_head, 
@@ -236,8 +206,6 @@ class GraphEncoderGPS(nn.Module):
         self.gps_layers = nn.ModuleList(
             [GPSLayer(graph_hidden_channels, n_head, n_feedforward, dropout, attention_dropout, conv_type) for _ in range(graph_layers)]
             )
-        self.mol_hidden1 = nn.Linear(graph_hidden_channels, nhid)
-        self.mol_hidden2 = nn.Linear(nhid, nout)
 
 
     def forward(self, batch):
@@ -247,9 +215,6 @@ class GraphEncoderGPS(nn.Module):
             batch = layer(batch)
 
         x = global_mean_pool(batch.x, batch.batch)
-        x = self.mol_hidden1(x).relu()
-        x = self.mol_hidden2(x)
-
         return x
 
     
@@ -269,16 +234,16 @@ class Model(nn.Module):
         graph_model_name = graph_model_name.lower()
         if graph_model_name == 'base':
             graph_layers = graph_config['graph_layer']
-            self.graph_encoder = GraphEncoder(num_node_features, nout, nhid, graph_hidden_channels, graph_layers)
+            self.graph_base = GraphEncoder(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'sage':
             graph_layers = graph_config['graph_layer']
-            self.graph_encoder = GraphEncoderSAGE(num_node_features, nout, nhid, graph_hidden_channels, graph_layers)
+            self.graph_base = GraphEncoderSAGE(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'deep':
             graph_layers = graph_config['graph_layer']
-            self.graph_encoder = GraphEncoderDeep(num_node_features, nout, nhid, graph_hidden_channels, graph_layers)
+            self.graph_base = GraphEncoderDeep(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'gin':
             graph_layers = graph_config['graph_layer']
-            self.graph_encoder = GraphEncoderGIN(num_node_features, nout, nhid, graph_hidden_channels, graph_layers)
+            self.graph_base = GraphEncoderGIN(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'gps':
             graph_layers = graph_config['graph_layer']
             n_head = graph_config['n_head']
@@ -289,9 +254,7 @@ class Model(nn.Module):
             conv_type = graph_config['conv_type']
             walk_length = graph_config['walk_length']
             dim_se = graph_config['dim_se']
-            self.graph_encoder = GraphEncoderGPS(num_node_features, 
-                                                nout, 
-                                                nhid, 
+            self.graph_base = GraphEncoderGPS(num_node_features,
                                                 graph_hidden_channels, 
                                                 graph_layers, 
                                                 n_head, 
@@ -302,6 +265,11 @@ class Model(nn.Module):
                                                 conv_type,
                                                 walk_length,
                                                 dim_se)
+            
+        self.projection_head = nn.Sequential(nn.Linear(graph_hidden_channels, nhid),
+                                              nn.ReLU(),
+                                              nn.Linear(nhid, nout))
+        self.graph_encoder = nn.Sequential(self.graph_base, self.projection_head)
 
         self.text_encoder = TextEncoder(model_name)
         
@@ -315,3 +283,70 @@ class Model(nn.Module):
     
     def get_graph_encoder(self):
         return self.graph_encoder
+    
+
+
+class GraphCL(nn.Module):
+    def __init__(self, graph_config, nhid, nout):
+        
+        super(GraphCL, self).__init__()
+        graph_model_name = graph_config['graph_model_name']
+        graph_model_name = graph_model_name.lower()
+
+        if graph_model_name == 'base':
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layer']
+            self.graph_base = GraphEncoder(num_node_features, graph_hidden_channels, graph_layers)
+
+        elif graph_model_name == 'sage':
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layer']
+            self.graph_base = GraphEncoderSAGE(num_node_features, graph_hidden_channels, graph_layers)
+
+        elif graph_model_name == 'deep':
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layer']
+            self.graph_base = GraphEncoderDeep(num_node_features, graph_hidden_channels, graph_layers)
+
+        elif graph_model_name == 'gin':
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layer']
+            self.graph_base = GraphEncoderGIN(num_node_features, graph_hidden_channels, graph_layers)
+
+        elif graph_model_name == 'gps':
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layer']
+            n_head = graph_config['n_head']
+            n_feedforward = graph_config['n_feedforward']
+            input_dropout = graph_config['input_dropout']
+            dropout = graph_config['dropout']
+            attention_dropout = graph_config['attention_dropout']
+            conv_type = graph_config['conv_type']
+            walk_length = graph_config['walk_length']
+            dim_se = graph_config['dim_se']
+            self.graph_base = GraphEncoderGPS(num_node_features,
+                                                graph_hidden_channels, 
+                                                graph_layers, 
+                                                n_head, 
+                                                n_feedforward, 
+                                                input_dropout, 
+                                                dropout, 
+                                                attention_dropout, 
+                                                conv_type,
+                                                walk_length,
+                                                dim_se)
+            
+        self.projection_head = nn.Sequential(nn.Linear(graph_hidden_channels, nhid),
+                                              nn.ReLU(),
+                                              nn.Linear(nhid, nout))
+
+
+    def forward(self, batch):
+        x = self.graph_base(batch)
+        x = self.projection_head(x)
+        return x
