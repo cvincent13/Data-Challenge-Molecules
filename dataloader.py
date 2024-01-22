@@ -99,14 +99,18 @@ class GraphTextDataset(Dataset):
         i = 0        
         for raw_path in self.raw_paths:
             cid = int(raw_path.split('/')[-1][:-6])
-            text_input = self.tokenizer([self.description[1][cid]],
-                                   return_tensors="pt", 
-                                   truncation=True, 
-                                   max_length=256,
-                                   padding="max_length",
-                                   add_special_tokens=True,)
-            edge_index, x = self.process_graph(raw_path)
-            data = Data(x=x, edge_index=edge_index, input_ids=text_input['input_ids'], attention_mask=text_input['attention_mask'])
+            if self.tokenizer:
+                text_input = self.tokenizer([self.description[1][cid]],
+                                    return_tensors="pt", 
+                                    truncation=True, 
+                                    max_length=256,
+                                    padding="max_length",
+                                    add_special_tokens=True,)
+                edge_index, x = self.process_graph(raw_path)
+                data = Data(x=x, edge_index=edge_index, input_ids=text_input['input_ids'], attention_mask=text_input['attention_mask'])
+            else:
+               edge_index, x = self.process_graph(raw_path)
+               data = Data(x=x, edge_index=edge_index, text=self.description[1][cid])
             if self.graph_transform is not None:
                data = self.graph_transform(data)
 
@@ -126,7 +130,7 @@ class GraphTextDataset(Dataset):
     
     
 class GraphDataset(Dataset):
-    def __init__(self, root, gt, split, transform=None, pre_transform=None):
+    def __init__(self, root, gt, split, graph_transform=None, transform=None, pre_transform=None):
         self.root = root
         self.gt = gt
         self.split = split
@@ -185,6 +189,8 @@ class GraphDataset(Dataset):
             cid = int(raw_path.split('/')[-1][:-6])
             edge_index, x = self.process_graph(raw_path)
             data = Data(x=x, edge_index=edge_index)
+            if self.graph_transform is not None:
+               data = self.graph_transform(data)
             torch.save(data, osp.join(self.processed_dir, 'data_{}.pt'.format(cid)))
             i += 1
 

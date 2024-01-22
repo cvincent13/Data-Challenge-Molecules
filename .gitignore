@@ -1,5 +1,6 @@
 data
 submission.csv
 checkpoints
+graph_checkpoints
 __pycache__
 rapport.txt

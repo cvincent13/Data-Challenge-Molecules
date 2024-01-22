@@ -1,0 +1,11 @@
+{
+    "model_name": "distilroberta-base",
+    "nb_epochs": 10,
+    "batch_size_train": 24,
+    "batch_size_test": 8,
+    "learning_rate": 2e-5,
+    "nout": 768,
+    "nhid": 300,
+    "load_graph_pretrained": "graph_checkpoints/4_gps_3_64_GCN.pt",
+    "model_type": "text"
+}

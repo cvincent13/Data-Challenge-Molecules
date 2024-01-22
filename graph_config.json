@@ -1,0 +1,17 @@
+{
+    "graph_model_name": "gps",
+    "num_node_features": 300,
+    "graph_hidden_channels": 64,
+    "graph_layers": 3,
+    "n_head": 4,
+    "n_feedforward": 128,
+    "input_dropout": 0.1,
+    "dropout": 0.0,
+    "attention_dropout": 0.25,
+    "conv_type": "GCN",
+    "walk_length": 20,
+    "dim_se": 28,
+    "pretraining_epochs": 5,
+    "pretraining_batch_size": 32,
+    "pretraining_lr": 0.001
+}

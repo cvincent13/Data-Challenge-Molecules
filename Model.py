@@ -2,6 +2,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from transformers import AutoModel
+from sentence_transformers import SentenceTransformer
 
 from torch_geometric.nn.models import GraphSAGE, GIN
 from torch_geometric.nn import GENConv, DeepGCNLayer, GCNConv, ResGatedGraphConv, GINEConv, Linear, global_mean_pool
@@ -9,6 +10,7 @@ from torch_geometric.nn.norm import LayerNorm
 from torch_geometric.utils import to_dense_batch
 import torch
 
+import numpy as np
 
 class GraphEncoder(nn.Module):
     def __init__(self, num_node_features, graph_hidden_channels, graph_layers):
@@ -124,6 +126,44 @@ class RWSEEncoder(nn.Module):
         x = torch.cat((x, rwse), 1)
         batch.x = self.in_dropout(x)
         return batch
+    
+class MultiHeadAttention(nn.Module):
+    def __init__(self, n_hidden, n_head, dropout):
+        super(MultiHeadAttention, self).__init__()
+        self.n_head = n_head
+        self.n_hidden = n_hidden
+        self.dim_head = n_hidden//n_head
+
+        self.Q = nn.Linear(n_hidden, self.dim_head * n_head)
+        self.K = nn.Linear(n_hidden, self.dim_head * n_head)
+        self.V = nn.Linear(n_hidden, self.dim_head * n_head)
+
+        self.out_dropout = nn.Dropout(dropout)
+        self.O = nn.Linear(n_hidden, n_hidden)
+
+    def forward(self, x, padding_mask=None, return_scores=False):
+        batch_size = x.size(0)
+        seq_length = x.size(1)
+
+        Q_x = self.Q(x).view(batch_size, -1, self.n_head, self.dim_head).permute((0,2,1,3))
+        K_x = self.K(x).view(batch_size, -1, self.n_head, self.dim_head).permute((0,2,1,3))
+        V_x = self.K(x).view(batch_size, -1, self.n_head, self.dim_head).permute((0,2,1,3))
+
+        padding_mask = padding_mask.view(batch_size, 1, 1, seq_length).expand(-1, self.n_head, -1, -1) * -1e9
+
+        scores = F.softmax(padding_mask + (Q_x @ K_x.transpose(-2,-1))/np.sqrt(self.dim_head), dim=-1)
+
+        attended_values = torch.matmul(scores, V_x)
+        attended_values = attended_values.permute((0,2,1,3)).contiguous().view(batch_size, -1, self.n_hidden)
+
+        attended_values = self.out_dropout(attended_values)
+        x = self.O(attended_values)
+
+        scores = scores.detach().cpu().numpy()
+
+        if return_scores:
+            return x, scores
+        return x
 
 class GPSLayer(nn.Module):
     def __init__(self, n_hidden, n_head, n_feedforward, dropout, attention_dropout, conv_type):
@@ -145,7 +185,7 @@ class GPSLayer(nn.Module):
 
         # Multi-head Attention
         self.attention_norm = LayerNorm(n_hidden)
-        self.multihead_attention = nn.MultiheadAttention(n_hidden, n_head, attention_dropout, batch_first=True)
+        self.multihead_attention = MultiHeadAttention(n_hidden, n_head, attention_dropout)
         self.attention_dropout = nn.Dropout(dropout)
 
         # Feed-forward network
@@ -168,10 +208,11 @@ class GPSLayer(nn.Module):
 
         # Self-attention
         x_att, mask = to_dense_batch(x, batch.batch)
-        x_att = self.multihead_attention(x_att, x_att, x_att, key_padding_mask=~mask, need_weights=False)[0][mask]
+        x_att = self.multihead_attention(x_att, padding_mask=~mask)[mask]
         x_att = self.attention_dropout(x_att)
         x_att = x_att + x_res1
         x_att = self.attention_norm(x_att)
+        x_att = x_res1
 
         x = x_gcn + x_att
 
@@ -223,29 +264,50 @@ class TextEncoder(nn.Module):
         super(TextEncoder, self).__init__()
         self.bert = AutoModel.from_pretrained(model_name)
         
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, sentences):
         encoded_text = self.bert(input_ids, attention_mask=attention_mask)
         #print(encoded_text.last_hidden_state.size())
         return encoded_text.last_hidden_state[:,0,:]
     
+
+class SentenceEncoder(nn.Module):
+    def __init__(self, model_name):
+        super(SentenceEncoder, self).__init__()
+        self.model = SentenceTransformer(model_name)
+        
+    def forward(self, input_ids, attention_mask, sentences):
+        encoded_text = self.model.encode(sentences)
+        return encoded_text
+    
 class Model(nn.Module):
-    def __init__(self, model_name, graph_model_name, num_node_features, nout, nhid, graph_hidden_channels, graph_config):
+    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text'):
         super(Model, self).__init__()
+        graph_model_name = graph_config['graph_model_name']
         graph_model_name = graph_model_name.lower()
         if graph_model_name == 'base':
-            graph_layers = graph_config['graph_layer']
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoder(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'sage':
-            graph_layers = graph_config['graph_layer']
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderSAGE(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'deep':
-            graph_layers = graph_config['graph_layer']
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderDeep(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'gin':
-            graph_layers = graph_config['graph_layer']
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderGIN(num_node_features, graph_hidden_channels, graph_layers)
         elif graph_model_name == 'gps':
-            graph_layers = graph_config['graph_layer']
+            num_node_features = graph_config['num_node_features']
+            graph_hidden_channels = graph_config['graph_hidden_channels']
+            graph_layers = graph_config['graph_layers']
             n_head = graph_config['n_head']
             n_feedforward = graph_config['n_feedforward']
             input_dropout = graph_config['input_dropout']
@@ -266,16 +328,23 @@ class Model(nn.Module):
                                                 walk_length,
                                                 dim_se)
             
+        if load_graph_pretrained:
+            checkpoint = torch.load(load_graph_pretrained)
+            self.graph_base.load_state_dict(checkpoint['model_state_dict'])
+
         self.projection_head = nn.Sequential(nn.Linear(graph_hidden_channels, nhid),
                                               nn.ReLU(),
                                               nn.Linear(nhid, nout))
         self.graph_encoder = nn.Sequential(self.graph_base, self.projection_head)
 
-        self.text_encoder = TextEncoder(model_name)
+        if model_type=='text':
+            self.text_encoder = TextEncoder(model_name)
+        elif model_type=='sentence':
+            self.text_encoder = SentenceEncoder(model_name)
         
-    def forward(self, graph_batch, input_ids, attention_mask):
+    def forward(self, graph_batch, input_ids=None, attention_mask=None, sentences=None):
         graph_encoded = self.graph_encoder(graph_batch)
-        text_encoded = self.text_encoder(input_ids, attention_mask)
+        text_encoded = self.text_encoder(input_ids, attention_mask, sentences)
         return graph_encoded, text_encoded
     
     def get_text_encoder(self):
@@ -296,31 +365,31 @@ class GraphCL(nn.Module):
         if graph_model_name == 'base':
             num_node_features = graph_config['num_node_features']
             graph_hidden_channels = graph_config['graph_hidden_channels']
-            graph_layers = graph_config['graph_layer']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoder(num_node_features, graph_hidden_channels, graph_layers)
 
         elif graph_model_name == 'sage':
             num_node_features = graph_config['num_node_features']
             graph_hidden_channels = graph_config['graph_hidden_channels']
-            graph_layers = graph_config['graph_layer']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderSAGE(num_node_features, graph_hidden_channels, graph_layers)
 
         elif graph_model_name == 'deep':
             num_node_features = graph_config['num_node_features']
             graph_hidden_channels = graph_config['graph_hidden_channels']
-            graph_layers = graph_config['graph_layer']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderDeep(num_node_features, graph_hidden_channels, graph_layers)
 
         elif graph_model_name == 'gin':
             num_node_features = graph_config['num_node_features']
             graph_hidden_channels = graph_config['graph_hidden_channels']
-            graph_layers = graph_config['graph_layer']
+            graph_layers = graph_config['graph_layers']
             self.graph_base = GraphEncoderGIN(num_node_features, graph_hidden_channels, graph_layers)
 
         elif graph_model_name == 'gps':
             num_node_features = graph_config['num_node_features']
             graph_hidden_channels = graph_config['graph_hidden_channels']
-            graph_layers = graph_config['graph_layer']
+            graph_layers = graph_config['graph_layers']
             n_head = graph_config['n_head']
             n_feedforward = graph_config['n_feedforward']
             input_dropout = graph_config['input_dropout']
