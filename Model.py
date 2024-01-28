@@ -5,7 +5,7 @@ from transformers import AutoModel
 from sentence_transformers import SentenceTransformer
 
 from torch_geometric.nn.models import GraphSAGE, GIN
-from torch_geometric.nn import GENConv, DeepGCNLayer, GCNConv, ResGatedGraphConv, GINEConv, Linear, global_mean_pool
+from torch_geometric.nn import GENConv, DeepGCNLayer, GCNConv, ResGatedGraphConv, GINEConv, Linear, global_mean_pool, global_add_pool
 from torch_geometric.nn.norm import LayerNorm
 from torch_geometric.utils import to_dense_batch
 import torch
@@ -240,13 +240,15 @@ class GraphEncoderGPS(nn.Module):
                  attention_dropout, 
                  conv_type,
                  walk_length,
-                 dim_se):
+                 dim_se,
+                 agg_type):
         
         super(GraphEncoderGPS, self).__init__()
         self.node_encoder = RWSEEncoder(num_node_features, graph_hidden_channels, walk_length, dim_se, input_dropout)
         self.gps_layers = nn.ModuleList(
             [GPSLayer(graph_hidden_channels, n_head, n_feedforward, dropout, attention_dropout, conv_type) for _ in range(graph_layers)]
             )
+        self.agg_type = agg_type
 
 
     def forward(self, batch):
@@ -255,7 +257,10 @@ class GraphEncoderGPS(nn.Module):
         for layer in self.gps_layers:
             batch = layer(batch)
 
-        x = global_mean_pool(batch.x, batch.batch)
+        if self.agg_type == 'sum':
+            x = global_add_pool(batch.x, batch.batch)
+        else:
+            x = global_mean_pool(batch.x, batch.batch)
         return x
 
     
@@ -279,8 +284,24 @@ class SentenceEncoder(nn.Module):
         encoded_text = self.model.encode(sentences)
         return encoded_text
     
+class W2VEncoder(nn.Module):
+    def __init__(self, trained_embeddings, nout):
+        super().__init__()
+        vocabulary_size, embedding_dim = trained_embeddings.shape
+        self.embeddings = nn.Embedding(
+            vocabulary_size, 
+            embedding_dim).from_pretrained(torch.Tensor(trained_embeddings))
+        self.linear = nn.Linear(embedding_dim, nout)
+        
+    def forward(self, input_ids, attention_mask, sentences):
+        x = input_ids.view(-1, 256)
+        x = self.embeddings(x)
+        x = torch.mean(x, dim=1)
+        o = self.linear(x)
+        return o
+    
 class Model(nn.Module):
-    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text'):
+    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text', w2v_embeddings=None):
         super(Model, self).__init__()
         graph_model_name = graph_config['graph_model_name']
         graph_model_name = graph_model_name.lower()
@@ -316,6 +337,7 @@ class Model(nn.Module):
             conv_type = graph_config['conv_type']
             walk_length = graph_config['walk_length']
             dim_se = graph_config['dim_se']
+            agg_type = graph_config['agg_type']
             self.graph_base = GraphEncoderGPS(num_node_features,
                                                 graph_hidden_channels, 
                                                 graph_layers, 
@@ -326,9 +348,10 @@ class Model(nn.Module):
                                                 attention_dropout, 
                                                 conv_type,
                                                 walk_length,
-                                                dim_se)
+                                                dim_se,
+                                                agg_type)
             
-        if load_graph_pretrained:
+        if len(load_graph_pretrained)>0:
             checkpoint = torch.load(load_graph_pretrained)
             self.graph_base.load_state_dict(checkpoint['model_state_dict'])
 
@@ -341,6 +364,8 @@ class Model(nn.Module):
             self.text_encoder = TextEncoder(model_name)
         elif model_type=='sentence':
             self.text_encoder = SentenceEncoder(model_name)
+        elif model_type=='w2v':
+            self.text_encoder = W2VEncoder(w2v_embeddings, nout)
         
     def forward(self, graph_batch, input_ids=None, attention_mask=None, sentences=None):
         graph_encoded = self.graph_encoder(graph_batch)
@@ -398,6 +423,7 @@ class GraphCL(nn.Module):
             conv_type = graph_config['conv_type']
             walk_length = graph_config['walk_length']
             dim_se = graph_config['dim_se']
+            agg_type = graph_config['agg_type']
             self.graph_base = GraphEncoderGPS(num_node_features,
                                                 graph_hidden_channels, 
                                                 graph_layers, 
@@ -408,7 +434,8 @@ class GraphCL(nn.Module):
                                                 attention_dropout, 
                                                 conv_type,
                                                 walk_length,
-                                                dim_se)
+                                                dim_se,
+                                                agg_type)
             
         self.projection_head = nn.Sequential(nn.Linear(graph_hidden_channels, nhid),
                                               nn.ReLU(),

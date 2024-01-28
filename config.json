@@ -3,9 +3,12 @@
     "nb_epochs": 10,
     "batch_size_train": 24,
     "batch_size_test": 8,
-    "learning_rate": 2e-5,
+    "learning_rate": 1e-4,
+    "weight_decay":1e-5,
+    "num_warmup_steps":250,
+    "scheduler_steps_factor":2,
     "nout": 768,
     "nhid": 300,
-    "load_graph_pretrained": "graph_checkpoints/4_gps_3_64_GCN.pt",
+    "load_graph_pretrained": "",
     "model_type": "text"
 }

@@ -1,7 +1,7 @@
 import os
 import os.path as osp
 import torch
-from torch_geometric.data import Dataset 
+from torch_geometric.data import Dataset
 from torch_geometric.data import Data
 import torch_geometric.transforms as T
 from torch_geometric.utils import to_dense_adj
@@ -38,11 +38,13 @@ class AddRWStructEncoding(T.BaseTransform):
 
 
 class GraphTextDataset(Dataset):
-    def __init__(self, root, gt, split, tokenizer=None, graph_transform=None, transform=None, pre_transform=None):
+    def __init__(self, root, gt, split, tokenizer=None, nltk_tokenizer=None, word2idx=None, graph_transform=None, transform=None, pre_transform=None):
         self.root = root
         self.gt = gt
         self.split = split
         self.tokenizer = tokenizer
+        self.nltk_tokenizer = nltk_tokenizer
+        self.word2idx = word2idx
         self.description = pd.read_csv(os.path.join(self.root, split+'.tsv'), sep='\t', header=None)   
         self.description = self.description.set_index(0).to_dict()
         self.cids = list(self.description[1].keys())
@@ -108,6 +110,15 @@ class GraphTextDataset(Dataset):
                                     add_special_tokens=True,)
                 edge_index, x = self.process_graph(raw_path)
                 data = Data(x=x, edge_index=edge_index, input_ids=text_input['input_ids'], attention_mask=text_input['attention_mask'])
+                
+            elif self.nltk_tokenizer:
+                tokenized_text = self.nltk_tokenizer(self.description[1][cid])
+                indexed_text = [self.word2idx.get(w, self.word2idx['UNK'])+1 for w in tokenized_text[:256]]
+                input_ids = torch.zeros(256, dtype=torch.long)
+                input_ids[:len(indexed_text)] = torch.LongTensor(indexed_text)
+                edge_index, x = self.process_graph(raw_path)
+                data = Data(x=x, edge_index=edge_index, input_ids=input_ids, attention_mask=torch.Tensor(0))
+               
             else:
                edge_index, x = self.process_graph(raw_path)
                data = Data(x=x, edge_index=edge_index, text=self.description[1][cid])
@@ -136,6 +147,8 @@ class GraphDataset(Dataset):
         self.split = split
         self.description = pd.read_csv(os.path.join(self.root, split+'.txt'), sep='\t', header=None)
         self.cids = self.description[0].tolist()
+
+        self.graph_transform = graph_transform
         
         self.idx_to_cid = {}
         i = 0
@@ -209,8 +222,10 @@ class GraphDataset(Dataset):
         return self.idx_to_cid
     
 class TextDataset(TorchDataset):
-    def __init__(self, file_path, tokenizer, max_length=256):
+    def __init__(self, file_path, tokenizer=None, nltk_tokenizer=None, word2idx=None, max_length=256):
         self.tokenizer = tokenizer
+        self.nltk_tokenizer = nltk_tokenizer
+        self.word2idx = word2idx
         self.max_length = max_length
         self.sentences = self.load_sentences(file_path)
 
@@ -225,19 +240,29 @@ class TextDataset(TorchDataset):
     def __getitem__(self, idx):
         sentence = self.sentences[idx]
 
-        encoding = self.tokenizer.encode_plus(
-            sentence,
-            add_special_tokens=True,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
+        if self.tokenizer:
+            encoding = self.tokenizer.encode_plus(
+                sentence,
+                add_special_tokens=True,
+                max_length=self.max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
 
-        return {
-            'input_ids': encoding['input_ids'].squeeze(),
-            'attention_mask': encoding['attention_mask'].squeeze()
-        }
+            return {
+                'input_ids': encoding['input_ids'].squeeze(),
+                'attention_mask': encoding['attention_mask'].squeeze()
+            }
+        elif self.nltk_tokenizer:
+            tokenized_text = self.nltk_tokenizer(sentence)
+            indexed_text = [self.word2idx.get(w, self.word2idx['UNK'])+1 for w in tokenized_text[:256]]
+            input_ids = torch.zeros(256, dtype=torch.long)
+            input_ids[:len(indexed_text)] = torch.LongTensor(indexed_text)
+            return {
+                'input_ids': input_ids,
+                'attention_mask': torch.Tensor(0)
+            }
 
 
 def drop_node_augment(graph, p, mask):

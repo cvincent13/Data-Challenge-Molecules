@@ -4,3 +4,9 @@ checkpoints
 graph_checkpoints
 __pycache__
 rapport.txt
+logs.txt
+graph_logs.txt
+submissions
+patent_w2v.txt
+w2v_embeddings.npy
+w2v_model.txt
