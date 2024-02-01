@@ -261,28 +261,27 @@ class GraphEncoderGPS(nn.Module):
             x = global_add_pool(batch.x, batch.batch)
         else:
             x = global_mean_pool(batch.x, batch.batch)
+        #x = F.normalize(x, p=2, dim=1)
         return x
 
     
 class TextEncoder(nn.Module):
-    def __init__(self, model_name):
+    def __init__(self, model_name, pooling_type):
         super(TextEncoder, self).__init__()
         self.bert = AutoModel.from_pretrained(model_name)
+        self.pooling_type = pooling_type
         
     def forward(self, input_ids, attention_mask, sentences):
         encoded_text = self.bert(input_ids, attention_mask=attention_mask)
-        #print(encoded_text.last_hidden_state.size())
-        return encoded_text.last_hidden_state[:,0,:]
+        if self.pooling_type == 'first':
+            out = encoded_text.last_hidden_state[:,0,:]
+        elif self.pooling_type == 'mean':
+            out = encoded_text.last_hidden_state
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(out.size()).float()
+            out = torch.sum(out * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            out = F.normalize(out, p=2, dim=1)
+        return out
     
-
-class SentenceEncoder(nn.Module):
-    def __init__(self, model_name):
-        super(SentenceEncoder, self).__init__()
-        self.model = SentenceTransformer(model_name)
-        
-    def forward(self, input_ids, attention_mask, sentences):
-        encoded_text = self.model.encode(sentences)
-        return encoded_text
     
 class W2VEncoder(nn.Module):
     def __init__(self, trained_embeddings, nout):
@@ -301,7 +300,7 @@ class W2VEncoder(nn.Module):
         return o
     
 class Model(nn.Module):
-    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text', w2v_embeddings=None):
+    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text', pooling_type='first', w2v_embeddings=None):
         super(Model, self).__init__()
         graph_model_name = graph_config['graph_model_name']
         graph_model_name = graph_model_name.lower()
@@ -361,9 +360,7 @@ class Model(nn.Module):
         self.graph_encoder = nn.Sequential(self.graph_base, self.projection_head)
 
         if model_type=='text':
-            self.text_encoder = TextEncoder(model_name)
-        elif model_type=='sentence':
-            self.text_encoder = SentenceEncoder(model_name)
+            self.text_encoder = TextEncoder(model_name, pooling_type)
         elif model_type=='w2v':
             self.text_encoder = W2VEncoder(w2v_embeddings, nout)
         

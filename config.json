@@ -1,5 +1,5 @@
 {
-    "model_name": "distilroberta-base",
+    "model_name": "sentence-transformers/all-distilroberta-v1",
     "nb_epochs": 10,
     "batch_size_train": 24,
     "batch_size_test": 8,
@@ -10,5 +10,6 @@
     "nout": 768,
     "nhid": 300,
     "load_graph_pretrained": "",
-    "model_type": "text"
+    "model_type": "text",
+    "pooling_type": "mean"
 }
