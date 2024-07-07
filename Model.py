@@ -10,6 +10,30 @@ from torch_geometric.nn.norm import LayerNorm
 from torch_geometric.utils import to_dense_batch
 import torch
 
+import json
+import os
+from pprint import pprint
+
+import bitsandbytes as bnb
+import pandas as pd
+import torch
+import torch.nn as nn
+import transformers
+
+from peft import (
+    LoraConfig,
+    PeftConfig,
+    PeftModel,
+    get_peft_model,
+    prepare_model_for_kbit_training,
+)
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
+
 import numpy as np
 
 class GraphEncoder(nn.Module):
@@ -266,9 +290,23 @@ class GraphEncoderGPS(nn.Module):
 
     
 class TextEncoder(nn.Module):
-    def __init__(self, model_name, pooling_type):
+    def __init__(self, model_name, pooling_type, qlora=False, target_modules=None):
         super(TextEncoder, self).__init__()
-        self.bert = AutoModel.from_pretrained(model_name)
+        
+        if qlora:
+            bnb_config =  BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+
+            model = AutoModel.from_pretrained(
+                model_name,
+                quantization_config=bnb_config,
+            )
+
+            config = LoraConfig(r=16, lora_alpha=32, target_modules=target_modules, lora_dropout=0.05, bias="none")
+
+            self.bert = get_peft_model(model, config)
+
+        else:
+            self.bert = AutoModel.from_pretrained(model_name)
         self.pooling_type = pooling_type
         
     def forward(self, input_ids, attention_mask, sentences):
@@ -300,7 +338,7 @@ class W2VEncoder(nn.Module):
         return o
     
 class Model(nn.Module):
-    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text', pooling_type='first', w2v_embeddings=None):
+    def __init__(self, model_name, nout, nhid, graph_config, load_graph_pretrained=None, model_type='text', pooling_type='first', qlora=False, target_modules=None, w2v_embeddings=None):
         super(Model, self).__init__()
         graph_model_name = graph_config['graph_model_name']
         graph_model_name = graph_model_name.lower()
@@ -360,7 +398,7 @@ class Model(nn.Module):
         self.graph_encoder = nn.Sequential(self.graph_base, self.projection_head)
 
         if model_type=='text':
-            self.text_encoder = TextEncoder(model_name, pooling_type)
+            self.text_encoder = TextEncoder(model_name, pooling_type, qlora, target_modules)
         elif model_type=='w2v':
             self.text_encoder = W2VEncoder(w2v_embeddings, nout)
         
